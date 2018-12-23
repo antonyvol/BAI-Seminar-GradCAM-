@@ -2,6 +2,7 @@ from keras.preprocessing.image import load_img
 from keras.preprocessing.image import img_to_array
 from keras.applications.vgg19 import preprocess_input
 from keras.applications.vgg19 import decode_predictions
+from keras.utils import plot_model
 from keras.applications.vgg19 import VGG19
 from tensorflow.python.framework import ops
 from keras.models import Model
@@ -11,7 +12,7 @@ import tensorflow as tf
 import numpy as np
 import cv2
 import keras
-
+from input import input_images_dir
 
 
 
@@ -23,7 +24,7 @@ def normalize(x):
 
 model = VGG19()
 
-image = load_img('cat.jpg', target_size=(224, 224))
+image = load_img(input_images_dir+'/input.jpg', target_size=(224, 224))
 image = img_to_array(image)
 image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
 image = preprocess_input(image)
@@ -45,6 +46,8 @@ x = Lambda(target_layer, output_shape = target_category_loss_output_shape)(model
 
 gcam_model = Model(inputs=model.input, outputs=x)
 gcam_model.summary()
+plot_model(model, to_file='model/vgg19.png')
+plot_model(gcam_model, to_file='model/gradCAM.png')
 
 def _compute_gradients(tensor, var_list):
 	grads = tf.gradients(tensor, var_list)
@@ -52,10 +55,12 @@ def _compute_gradients(tensor, var_list):
 
 
 loss = K.sum(gcam_model.output)
-print(loss)
+print('loss is', loss)
 conv_output =  [l for l in gcam_model.layers if l.name is activation_layer][0].output
 grads = normalize(_compute_gradients(loss, [conv_output])[0])
 gradient_function = K.function([gcam_model.input], [conv_output, grads])
+
+print(conv_output)
 
 output, grads_val = gradient_function([image])
 output, grads_val = output[0, :], grads_val[0, :, :, :]
@@ -79,17 +84,16 @@ cam = cv2.applyColorMap(np.uint8(255*heatmap), cv2.COLORMAP_JET)
 cam = np.float32(cam) + np.float32(image)
 cam = 255 * cam / np.max(cam)
 
-cv2.imwrite("gradcam_vgg19.jpg", cam)
+cv2.imwrite(input_images_dir+'/gradcam_vgg19.jpg', cam)
 
-# _____________________________________GUIDED GRAD CAM VGG19__________________________________________
+# _____________________________________GUIDED BACKPROP VGG19__________________________________________
 
 def register_gradient():
     if "GuidedBackProp" not in ops._gradient_registry._registry:
         @ops.RegisterGradient("GuidedBackProp")
         def _GuidedBackProp(op, grad):
             dtype = op.inputs[0].dtype
-            return grad * tf.cast(grad > 0., dtype) * \
-                tf.cast(op.inputs[0] > 0., dtype)
+            return grad * tf.cast(grad > 0., dtype) * tf.cast(op.inputs[0] > 0., dtype)
 
 
 def compile_saliency_function(model, activation_layer):
@@ -106,8 +110,7 @@ def modify_backprop(model, name):
     with g.gradient_override_map({'Relu': name}):
 
         # get layers that have an activation
-        layer_dict = [layer for layer in model.layers[1:]
-                      if hasattr(layer, 'activation')]
+        layer_dict = [layer for layer in model.layers[1:] if hasattr(layer, 'activation')]
 
         # replace relu activation
         for layer in layer_dict:
@@ -142,16 +145,34 @@ def deprocess_image(x):
     x = np.clip(x, 0, 255).astype('uint8')
     return x
 
-image = load_img('cat.jpg', target_size=(224, 224))
+image = load_img(input_images_dir+'/input.jpg', target_size=(224, 224))
 image = img_to_array(image)
 image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
 image = preprocess_input(image)
 
 register_gradient()
-guided_model = modify_backprop(gcam_model, 'GuidedBackProp')
+guided_model = modify_backprop(model, 'GuidedBackProp')
 saliency_fn = compile_saliency_function(guided_model, activation_layer)
 saliency = saliency_fn([image, 0])
-gradcam = saliency[0] * heatmap[..., np.newaxis]
-cv2.imwrite("guided_gradcam_vgg19.jpg", deprocess_image(gradcam))
+cv2.imwrite(input_images_dir+'/guided_backprop_vgg19.jpg', deprocess_image(saliency))
+
+#_______________________________  GUIDED GRADCAM _____________________________________________
+
+gradcam = saliency * heatmap[..., np.newaxis]
+cv2.imwrite(input_images_dir+'/guided_gradcam_vgg19.jpg', deprocess_image(gradcam))
 
 
+#_______________________________  DECONVOLUTION _____________________________________________
+def register_Deconvolve_gradient():
+    if "DeconvReLU" not in ops._gradient_registry._registry:
+        @ops.RegisterGradient("DeconvReLU")
+        def _DeconvReLU(op, grad):
+            dtype = op.inputs[0].dtype
+            return grad * tf.cast(grad > 0., dtype)
+
+
+register_Deconvolve_gradient()
+deconvolved_model = modify_backprop(model, 'DeconvReLU')
+saliency_fn = compile_saliency_function(deconvolved_model, activation_layer)
+saliency = saliency_fn([image, 0])
+cv2.imwrite(input_images_dir+'/deconvolved_vgg19.jpg', deprocess_image(saliency))

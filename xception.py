@@ -11,7 +11,7 @@ import tensorflow as tf
 import numpy as np
 import cv2
 import keras
-
+from input import input_images_dir
 
 #____________________________________________ GRAD CAM RESNET50______________________________________________
 
@@ -22,7 +22,7 @@ def normalize(x):
 
 model = Xception()
 
-image = load_img('cat.jpg', target_size=(229, 229))
+image = load_img(input_images_dir+'/input.jpg', target_size=(229, 229))
 image = img_to_array(image)
 image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
 image = preprocess_input(image)
@@ -75,7 +75,7 @@ cam = cv2.applyColorMap(np.uint8(255*heatmap), cv2.COLORMAP_JET)
 cam = np.float32(cam)/80. + np.float32(image) # /80 normalization bullshit, need to rewrite
 cam = 255 * cam / np.max(cam)
 
-cv2.imwrite("gradcam_xception.jpg", cam)
+cv2.imwrite(input_images_dir+'/gradcam_xception.jpg', cam)
 
 
 # # _____________________________________GUIDED GRAD CAM RESNET50__________________________________________
@@ -139,7 +139,7 @@ def deprocess_image(x):
     x = np.clip(x, 0, 255).astype('uint8')
     return x
 
-image = load_img('cat.jpg', target_size=(229, 229))
+image = load_img(input_images_dir+'/input.jpg', target_size=(229, 229))
 image = img_to_array(image)
 image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
 image = preprocess_input(image)
@@ -149,4 +149,4 @@ guided_model = modify_backprop(gcam_model, 'GuidedBackProp')
 saliency_fn = compile_saliency_function(guided_model, activation_layer)
 saliency = saliency_fn([image, 0])
 gradcam = saliency[0] * heatmap[..., np.newaxis]
-cv2.imwrite("guided_gradcam_xception.jpg", deprocess_image(gradcam))
+cv2.imwrite(input_images_dir+'/guided_gradcam_xception.jpg', deprocess_image(gradcam))
