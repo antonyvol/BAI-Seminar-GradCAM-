@@ -5,6 +5,7 @@ from keras.applications.xception import decode_predictions
 from keras.applications.xception import Xception
 from tensorflow.python.framework import ops
 from keras.models import Model
+from keras.utils import plot_model
 from keras import backend as K
 from keras.layers.core import Lambda
 import tensorflow as tf
@@ -21,7 +22,7 @@ def normalize(x):
     return x / (K.sqrt(K.mean(K.square(x))) + 1e-5)
 
 model = Xception()
-
+plot_model(model, to_file='model/xception.png')
 image = load_img(input_images_dir+'/input.jpg', target_size=(229, 229))
 image = img_to_array(image)
 image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
@@ -85,8 +86,7 @@ def register_gradient():
         @ops.RegisterGradient("GuidedBackProp")
         def _GuidedBackProp(op, grad):
             dtype = op.inputs[0].dtype
-            return grad * tf.cast(grad > 0., dtype) * \
-                tf.cast(op.inputs[0] > 0., dtype)
+            return grad * tf.cast(grad > 0., dtype) * tf.cast(op.inputs[0] > 0., dtype)
 
 
 def compile_saliency_function(model, activation_layer):
@@ -145,8 +145,28 @@ image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
 image = preprocess_input(image)
 
 register_gradient()
-guided_model = modify_backprop(gcam_model, 'GuidedBackProp')
+guided_model = modify_backprop(model, 'GuidedBackProp')
 saliency_fn = compile_saliency_function(guided_model, activation_layer)
 saliency = saliency_fn([image, 0])
-gradcam = saliency[0] * heatmap[..., np.newaxis]
+cv2.imwrite(input_images_dir+'/guided_backprop_xception.jpg', deprocess_image(saliency))
+
+#_______________________________  GUIDED GRADCAM _____________________________________________
+
+gradcam = saliency * heatmap[..., np.newaxis]
 cv2.imwrite(input_images_dir+'/guided_gradcam_xception.jpg', deprocess_image(gradcam))
+
+
+#_______________________________  DECONVOLUTION _____________________________________________
+def register_Deconvolve_gradient():
+    if "DeconvReLU" not in ops._gradient_registry._registry:
+        @ops.RegisterGradient("DeconvReLU")
+        def _DeconvReLU(op, grad):
+            dtype = op.inputs[0].dtype
+            return grad * tf.cast(grad > 0., dtype)
+
+
+register_Deconvolve_gradient()
+deconvolved_model = modify_backprop(model, 'DeconvReLU')
+saliency_fn = compile_saliency_function(deconvolved_model, activation_layer)
+saliency = saliency_fn([image, 0])
+cv2.imwrite(input_images_dir+'/deconvolved_xception.jpg', deprocess_image(saliency))
