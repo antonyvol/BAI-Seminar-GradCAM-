@@ -6,12 +6,14 @@ from keras.applications.resnet50 import ResNet50
 from tensorflow.python.framework import ops
 from keras.models import Model
 from keras import backend as K
+from keras.utils import plot_model
 from keras.layers.core import Lambda
 import tensorflow as tf
 import numpy as np
 import cv2
 import keras
 
+from input import input_images_dir
 
 #____________________________________________ GRAD CAM RESNET50______________________________________________
 
@@ -21,8 +23,9 @@ def normalize(x):
     return x / (K.sqrt(K.mean(K.square(x))) + 1e-5)
 
 model = ResNet50()
+plot_model(model, to_file='model/resnet50.png')
 
-image = load_img('cat.jpg', target_size=(224, 224))
+image = load_img(input_images_dir+'/input.jpg', target_size=(224, 224))
 image = img_to_array(image)
 image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
 image = preprocess_input(image)
@@ -42,6 +45,7 @@ target_layer = lambda x: target_category_loss(x, predicted_class, nb_classes)
 x = Lambda(target_layer, output_shape = target_category_loss_output_shape)(model.output)
 
 gcam_model = Model(inputs=model.input, outputs=x)
+
 
 def _compute_gradients(tensor, var_list):
 	grads = tf.gradients(tensor, var_list)
@@ -75,8 +79,7 @@ cam = cv2.applyColorMap(np.uint8(255*heatmap), cv2.COLORMAP_JET)
 cam = np.float32(cam) + np.float32(image)
 cam = 255 * cam / np.max(cam)
 
-cv2.imwrite("gradcam_resnet50.jpg", cam)
-
+cv2.imwrite(input_images_dir+'/gradcam_resnet50.jpg', cam)
 
 # _____________________________________GUIDED GRAD CAM RESNET50__________________________________________
 
@@ -85,8 +88,7 @@ def register_gradient():
         @ops.RegisterGradient("GuidedBackProp")
         def _GuidedBackProp(op, grad):
             dtype = op.inputs[0].dtype
-            return grad * tf.cast(grad > 0., dtype) * \
-                tf.cast(op.inputs[0] > 0., dtype)
+            return grad * tf.cast(grad > 0., dtype) * tf.cast(op.inputs[0] > 0., dtype)
 
 
 def compile_saliency_function(model, activation_layer):
@@ -113,6 +115,7 @@ def modify_backprop(model, name):
 
         # re-instanciate a new model
         new_model = ResNet50()
+        #model.build(image)
     return new_model
 
 
@@ -139,14 +142,36 @@ def deprocess_image(x):
     x = np.clip(x, 0, 255).astype('uint8')
     return x
 
-image = load_img('cat.jpg', target_size=(224, 224))
+image = load_img(input_images_dir+'/input.jpg', target_size=(224, 224))
 image = img_to_array(image)
 image = image.reshape((1, image.shape[0], image.shape[1], image.shape[2]))
 image = preprocess_input(image)
 
 register_gradient()
-guided_model = modify_backprop(gcam_model, 'GuidedBackProp')
+guided_model = modify_backprop(model, 'GuidedBackProp')
+
 saliency_fn = compile_saliency_function(guided_model, 'activation_98')
 saliency = saliency_fn([image, 0])
-gradcam = saliency[0] * heatmap[..., np.newaxis]
-cv2.imwrite("guided_gradcam_resnet50.jpg", deprocess_image(gradcam))
+cv2.imwrite(input_images_dir+'/guided_backprop_resnet50.jpg', deprocess_image(saliency))
+
+#_______________________________  GUIDED GRADCAM _____________________________________________
+
+gradcam = saliency * heatmap[..., np.newaxis]
+cv2.imwrite(input_images_dir+'/guided_gradcam_resnet50.jpg', deprocess_image(gradcam))
+
+
+
+#_______________________________  DECONVOLUTION _____________________________________________
+def register_Deconvolve_gradient():
+    if "DeconvReLU" not in ops._gradient_registry._registry:
+        @ops.RegisterGradient("DeconvReLU")
+        def _DeconvReLU(op, grad):
+            dtype = op.inputs[0].dtype
+            return grad * tf.cast(grad > 0., dtype)
+
+
+register_Deconvolve_gradient()
+deconvolved_model = modify_backprop(model, 'DeconvReLU')
+saliency_fn = compile_saliency_function(deconvolved_model, 'activation_147')
+saliency = saliency_fn([image, 0])
+cv2.imwrite(input_images_dir+'/deconvolved_resnet50.jpg', deprocess_image(saliency))
